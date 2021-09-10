@@ -65,6 +65,9 @@ type OriginType string
 const (
 	// GitOrigin specifies a package as having been cloned from a git repository.
 	GitOrigin OriginType = "git"
+
+	// OciOrigin specifies a package as having been pulled from an OCI image.
+	OciOrigin OriginType = "oci"
 )
 
 // UpdateStrategyType defines the strategy for updating a package from upstream.
@@ -121,6 +124,9 @@ type Upstream struct {
 	// Git is the locator for a package stored on Git.
 	Git *Git `yaml:"git,omitempty"`
 
+	// Oci is the locator for a package stored on image registry.
+	Oci *Oci `yaml:"oci,omitempty"`
+
 	// UpdateStrategy declares how a package will be updated from upstream.
 	UpdateStrategy UpdateStrategyType `yaml:"updateStrategy,omitempty"`
 }
@@ -139,6 +145,13 @@ type Git struct {
 	Ref string `yaml:"ref,omitempty"`
 }
 
+// OCI is the user-specified locator for an image on Git.
+type Oci struct {
+	// Image is the OCI image repository for the package.
+	// e.g. 'REGION-docker.pkg.dev/PROJECT/REGISTRY/gke/hello-app:draft'
+	Image string `yaml:"image,omitempty"`
+}
+
 // UpstreamLock is a resolved locator for the last fetch of the package.
 type UpstreamLock struct {
 	// Type is the type of origin.
@@ -146,6 +159,9 @@ type UpstreamLock struct {
 
 	// Git is the resolved locator for a package on Git.
 	Git *GitLock `yaml:"git,omitempty"`
+
+	// Oci is the resolved locator for a package on image registry.
+	Oci *OciLock `yaml:"oci,omitempty"`
 }
 
 // GitLock is the resolved locator for a package on Git.
@@ -165,6 +181,17 @@ type GitLock struct {
 	// Commit is the SHA-1 for the last fetch of the package.
 	// This is set by kpt for bookkeeping purposes.
 	Commit string `yaml:"commit,omitempty"`
+}
+
+// OciLock is the resolved locator for a package on image registry.
+type OciLock struct {
+	// Image is the OCI image repository for the package.
+	// e.g. 'gcr.io/example'
+	Image string `yaml:"image,omitempty"`
+
+	// Digest is the SHA-256 for the last update of the image.
+	// This is set by kpt for bookkeeping purposes.
+	Digest string `yaml:"commit,omitempty"`
 }
 
 // PackageInfo contains optional information about the package such as license, documentation, etc.

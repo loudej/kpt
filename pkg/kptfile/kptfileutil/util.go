@@ -223,6 +223,32 @@ func UpdateUpstreamLockFromGit(path string, spec *git.RepoSpec) error {
 	return nil
 }
 
+// UpdateUpstreamLockFromOCI updates the upstreamLock of the package specified
+// by path by using the values from spec. It will also populate the commit
+// field in upstreamLock using the latest digest of the image.
+func UpdateUpstreamLockFromOCI(path string, image string, digest string) error {
+	const op errors.Op = "kptfileutil.UpdateUpstreamLockFromOCI"
+	// read KptFile cloned with the package if it exists
+	kpgfile, err := pkg.ReadKptfile(path)
+	if err != nil {
+		return errors.E(op, types.UniquePath(path), err)
+	}
+
+	// populate the cloneFrom values so we know where the package came from
+	kpgfile.UpstreamLock = &kptfilev1.UpstreamLock{
+		Type: kptfilev1.OciOrigin,
+		Oci: &kptfilev1.OciLock{
+			Image:  image,
+			Digest: digest,
+		},
+	}
+	err = WriteFile(path, kpgfile)
+	if err != nil {
+		return errors.E(op, types.UniquePath(path), err)
+	}
+	return nil
+}
+
 func merge(localKf, updatedKf, originalKf *kptfilev1.KptFile) error {
 	localBytes, err := yaml.Marshal(localKf)
 	if err != nil {

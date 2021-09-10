@@ -29,7 +29,49 @@ import (
 
 type Target struct {
 	kptfilev1.Git
+	kptfilev1.Oci
 	Destination string
+}
+
+func OciParseArgs(ctx context.Context, args []string) (Target, error) {
+	g := Target{}
+	if args[0] == "-" {
+		return g, nil
+	}
+
+	return targetFromImageName(args[0], args[1])
+}
+
+func targetFromImageName(image, dest string) (Target, error) {
+	g := Target{}
+
+	parts1 := strings.Split(image, "@sha256:")
+	parts2 := strings.Split(parts1[0], ":")
+	parts3 := strings.Split(parts2[0], "/")
+
+	registry := ""
+	repo := parts2[0]
+
+	if parts3[0] == "gcr.io" {
+		registry = parts3[0] + "/" + parts3[1]
+	} else if strings.Contains(parts3[0], ".") {
+		registry = parts3[0]
+	}
+
+	if registry != "" {
+		repo = repo[len(registry)+1:]
+	}
+
+	destination, err := getDest(dest, registry, repo)
+	if err != nil {
+		return g, err
+	}
+
+	g.Oci = kptfilev1.Oci{
+		Image: image,
+	}
+	g.Destination = destination
+	return g, nil
 }
 
 func GitParseArgs(ctx context.Context, args []string) (Target, error) {

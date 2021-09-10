@@ -14,7 +14,7 @@
 
 .PHONY: docs license fix vet fmt lint test build tidy
 
-GOBIN := $(shell go env GOPATH)/bin
+GOBIN := $(firstword $(subst :, ,$(shell go env GOPATH)))/bin
 
 # T refers to an e2e test case matcher. This enables running e2e tests
 # selectively.  For example,

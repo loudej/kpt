@@ -83,10 +83,14 @@ func (r *Runner) preRunE(_ *cobra.Command, args []string) error {
 	}
 	t, err := parse.GitParseArgs(r.ctx, args)
 	if err != nil {
-		return errors.E(op, err)
+		t, err2 := parse.OciParseArgs(r.ctx, args)
+		if err2 != nil {
+			return errors.E(op, err, err2)
+		}
+		r.Get.Oci = &t.Oci
+	} else {
+		r.Get.Git = &t.Git
 	}
-
-	r.Get.Git = &t.Git
 	p, err := pkg.New(t.Destination)
 	if err != nil {
 		return errors.E(op, types.UniquePath(t.Destination), err)

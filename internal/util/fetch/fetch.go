@@ -15,8 +15,10 @@
 package fetch
 
 import (
+	"archive/tar"
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path"
@@ -34,6 +36,10 @@ import (
 	"github.com/GoogleContainerTools/kpt/internal/util/pkgutil"
 	kptfilev1 "github.com/GoogleContainerTools/kpt/pkg/api/kptfile/v1"
 	"github.com/GoogleContainerTools/kpt/pkg/kptfile/kptfileutil"
+	"github.com/google/go-containerregistry/pkg/crane"
+	"github.com/google/go-containerregistry/pkg/gcrane"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"sigs.k8s.io/kustomize/kyaml/copyutil"
 )
 
 // Command takes the upstream information in the Kptfile at the path for the
@@ -55,15 +61,26 @@ func (c Command) Run(ctx context.Context) error {
 		return errors.E(op, c.Pkg.UniquePath, err)
 	}
 
-	g := kf.Upstream.Git
-	repoSpec := &git.RepoSpec{
-		OrgRepo: g.Repo,
-		Path:    g.Directory,
-		Ref:     g.Ref,
-	}
-	err = cloneAndCopy(ctx, repoSpec, c.Pkg.UniquePath.String())
-	if err != nil {
-		return errors.E(op, c.Pkg.UniquePath, err)
+	switch kf.Upstream.Type {
+	case kptfilev1.GitOrigin:
+		g := kf.Upstream.Git
+		repoSpec := &git.RepoSpec{
+			OrgRepo: g.Repo,
+			Path:    g.Directory,
+			Ref:     g.Ref,
+		}
+		err = cloneAndCopy(ctx, repoSpec, c.Pkg.UniquePath.String())
+		if err != nil {
+			return errors.E(op, c.Pkg.UniquePath, err)
+		}
+	case kptfilev1.OciOrigin:
+		options := &[]crane.Option{crane.WithAuthFromKeychain(gcrane.Keychain)}
+
+		o := kf.Upstream.Oci
+		err = pullAndCopy(ctx, o.Image, c.Pkg.UniquePath.String(), options)
+		if err != nil {
+			return errors.E(op, c.Pkg.UniquePath, err)
+		}
 	}
 	return nil
 }
@@ -76,20 +93,35 @@ func (c Command) validate(kf *kptfilev1.KptFile) error {
 		return errors.E(op, errors.MissingParam, fmt.Errorf("kptfile doesn't contain upstream information"))
 	}
 
-	if kf.Upstream.Git == nil {
-		return errors.E(op, errors.MissingParam, fmt.Errorf("kptfile upstream doesn't have git information"))
+	switch kf.Upstream.Type {
+	case kptfilev1.GitOrigin:
+		if kf.Upstream.Git == nil {
+			return errors.E(op, errors.MissingParam, fmt.Errorf("kptfile upstream doesn't have git information"))
+		}
+
+		g := kf.Upstream.Git
+		if len(g.Repo) == 0 {
+			return errors.E(op, errors.MissingParam, fmt.Errorf("must specify repo"))
+		}
+		if len(g.Ref) == 0 {
+			return errors.E(op, errors.MissingParam, fmt.Errorf("must specify ref"))
+		}
+		if len(g.Directory) == 0 {
+			return errors.E(op, errors.MissingParam, fmt.Errorf("must specify directory"))
+		}
+	case kptfilev1.OciOrigin:
+		if kf.Upstream.Oci == nil {
+			return errors.E(op, errors.MissingParam, fmt.Errorf("kptfile upstream doesn't have oci information"))
+		}
+
+		o := kf.Upstream.Oci
+		if len(o.Image) == 0 {
+			return errors.E(op, errors.MissingParam, fmt.Errorf("must specify image"))
+		}
+	default:
+		return errors.E(op, errors.MissingParam, fmt.Errorf("kptfile upstream has unknown type"))
 	}
 
-	g := kf.Upstream.Git
-	if len(g.Repo) == 0 {
-		return errors.E(op, errors.MissingParam, fmt.Errorf("must specify repo"))
-	}
-	if len(g.Ref) == 0 {
-		return errors.E(op, errors.MissingParam, fmt.Errorf("must specify ref"))
-	}
-	if len(g.Directory) == 0 {
-		return errors.E(op, errors.MissingParam, fmt.Errorf("must specify directory"))
-	}
 	return nil
 }
 
@@ -254,4 +286,90 @@ func copyDir(ctx context.Context, srcDir string, dstDir string) error {
 		},
 	}
 	return copy.Copy(srcDir, dstDir, opts)
+}
+
+func pullAndCopy(ctx context.Context, imageName string, dest string, options *[]crane.Option) error {
+	const op errors.Op = "fetch.pullAndCopy"
+	// pr := printer.FromContextOrDie(ctx)
+
+	// We need to create a temp directory where we can copy the content of the repo.
+	// During update, we need to checkout multiple versions of the same repo, so
+	// we can't do merges directly from the cache.
+	dir, err := ioutil.TempDir("", "kpt-get-")
+	if err != nil {
+		return errors.E(op, errors.Internal, fmt.Errorf("error creating temp directory: %w", err))
+	}
+	defer os.RemoveAll(dir)
+
+	// Pull image from source using current auth credentials
+	image, err := crane.Pull(imageName, *options...)
+	if err != nil {
+		return fmt.Errorf("pulling %s: %v", imageName, err)
+	}
+
+	// Use image digest for
+	digest, err := image.Digest()
+	if err != nil {
+		return errors.E(op, errors.Internal, fmt.Errorf("error calculating image digest: %w", err))
+	}
+	commit := digest.Hex
+
+	// Stream image files as if single tar (merged layers)
+	ioReader := mutate.Extract(image)
+	defer ioReader.Close()
+
+	// Stream image files as if single tar (merged layers)
+	tarReader := tar.NewReader(ioReader)
+	for {
+		hdr, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(dir, hdr.Name)
+		switch {
+		case hdr.FileInfo().IsDir():
+			if err := os.MkdirAll(path, hdr.FileInfo().Mode()); err != nil {
+				return err
+			}
+		case hdr.Linkname != "":
+			if err := os.Symlink(hdr.Linkname, path); err != nil {
+				// just warn for now
+				fmt.Fprintln(os.Stderr, err)
+				// return err
+			}
+		default:
+			file, err := os.OpenFile(path,
+				os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+				os.FileMode(hdr.Mode),
+			)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			_, err = io.Copy(file, tarReader)
+			if err != nil {
+				return err
+			}
+
+		}
+	}
+
+	sourcePath := dir
+	if err := pkgutil.CopyPackage(sourcePath, dest, true, pkg.All); err != nil {
+		return errors.E(op, types.UniquePath(dest), err)
+	}
+
+	if err := kptfileutil.UpdateKptfileWithoutOrigin(dest, sourcePath, false); err != nil {
+		return errors.E(op, types.UniquePath(dest), err)
+	}
+
+	if err := kptfileutil.UpdateUpstreamLockFromOCI(dest, imageName, commit); err != nil {
+		return errors.E(op, errors.OCI, types.UniquePath(dest), err)
+	}
+
+	return nil
 }

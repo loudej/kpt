@@ -136,6 +136,31 @@ definitions:
         x-go-name: Namespace
     type: object
     x-go-package: sigs.k8s.io/kustomize/kyaml/yaml
+  Oci:
+    properties:
+      Image:
+        description: |-
+          Image is the OCI image repository for the package.
+          e.g. 'REGION-docker.pkg.dev/PROJECT/REGISTRY/gke/hello-app:draft'
+        type: string
+    title: OCI is the user-specified locator for an image on Git.
+    type: object
+    x-go-package: github.com/GoogleContainerTools/kpt/pkg/api/kptfile/v1
+  OciLock:
+    properties:
+      Digest:
+        description: |-
+          Digest is the SHA-256 for the last update of the image.
+          This is set by kpt for bookkeeping purposes.
+        type: string
+      Image:
+        description: |-
+          Image is the OCI image repository for the package.
+          e.g. 'gcr.io/example'
+        type: string
+    title: OciLock is the resolved locator for a package on image registry.
+    type: object
+    x-go-package: github.com/GoogleContainerTools/kpt/pkg/api/kptfile/v1
   originType:
     title: OriginType defines the type of origin for a package.
     type: string
