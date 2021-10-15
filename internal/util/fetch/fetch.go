@@ -40,7 +40,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/gcrane"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"sigs.k8s.io/kustomize/kyaml/copyutil"
 )
 
 // Command takes the upstream information in the Kptfile at the path for the
