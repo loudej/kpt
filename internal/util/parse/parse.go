@@ -24,6 +24,7 @@ import (
 
 	"github.com/GoogleContainerTools/kpt/internal/gitutil"
 	kptfilev1 "github.com/GoogleContainerTools/kpt/pkg/api/kptfile/v1"
+	"github.com/google/go-containerregistry/pkg/name"
 	"sigs.k8s.io/kustomize/kyaml/errors"
 )
 
@@ -45,30 +46,20 @@ func OciParseArgs(ctx context.Context, args []string) (Target, error) {
 func targetFromImageName(image, dest string) (Target, error) {
 	g := Target{}
 
-	parts1 := strings.Split(image, "@sha256:")
-	parts2 := strings.Split(parts1[0], ":")
-	parts3 := strings.Split(parts2[0], "/")
-
-	registry := ""
-	repo := parts2[0]
-
-	if parts3[0] == "gcr.io" {
-		registry = parts3[0] + "/" + parts3[1]
-	} else if strings.Contains(parts3[0], ".") {
-		registry = parts3[0]
+	ref, err := name.ParseReference(image)
+	if err != nil {
+		return g, err
 	}
 
-	if registry != "" {
-		repo = repo[len(registry)+1:]
-	}
-
-	destination, err := getDest(dest, registry, repo)
+	registry := ref.Context().RegistryStr()
+	repository := ref.Context().RepositoryStr()
+	destination, err := getDest(dest, registry, repository)
 	if err != nil {
 		return g, err
 	}
 
 	g.Oci = kptfilev1.Oci{
-		Image: image,
+		Image: ref.Name(),
 	}
 	g.Destination = destination
 	return g, nil

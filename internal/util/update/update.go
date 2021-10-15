@@ -36,6 +36,9 @@ import (
 	"github.com/GoogleContainerTools/kpt/internal/util/stack"
 	kptfilev1 "github.com/GoogleContainerTools/kpt/pkg/api/kptfile/v1"
 	"github.com/GoogleContainerTools/kpt/pkg/kptfile/kptfileutil"
+	"github.com/google/go-containerregistry/pkg/crane"
+	"github.com/google/go-containerregistry/pkg/gcrane"
+	"github.com/google/go-containerregistry/pkg/name"
 	"sigs.k8s.io/kustomize/kyaml/copyutil"
 )
 
@@ -113,23 +116,33 @@ func (u Command) Run(ctx context.Context) error {
 		return errors.E(op, errors.MissingParam, "pkg must be provided")
 	}
 
+	// TODO(dejardin): opt out of this git test?
 	// require package is checked into git before trying to update it
-	if err := checkIfCommitted(ctx, u.Pkg); err != nil {
-		return errors.E(op, u.Pkg.UniquePath, err)
-	}
+	// if err := checkIfCommitted(ctx, u.Pkg); err != nil {
+	// 	return errors.E(op, u.Pkg.UniquePath, err)
+	// }
 
 	rootKf, err := u.Pkg.Kptfile()
 	if err != nil {
 		return errors.E(op, u.Pkg.UniquePath, err)
 	}
 
-	if rootKf.Upstream == nil || rootKf.Upstream.Git == nil {
+	if rootKf.Upstream == nil || (rootKf.Upstream.Git == nil && rootKf.Upstream.Oci == nil) {
 		return errors.E(op, u.Pkg.UniquePath,
 			fmt.Errorf("package must have an upstream reference"))
 	}
 	originalRootKfRef := rootKf.Upstream.Git.Ref
 	if u.Ref != "" {
-		rootKf.Upstream.Git.Ref = u.Ref
+		if rootKf.Upstream.Git != nil {
+			rootKf.Upstream.Git.Ref = u.Ref
+		}
+		if rootKf.Upstream.Oci != nil {
+			ref, err := name.ParseReference(rootKf.Upstream.Oci.Image)
+			if err != nil {
+				return errors.E(op, u.Pkg.UniquePath, err)
+			}
+			rootKf.Upstream.Oci.Image = ref.Context().Tag(u.Ref).Name()
+		}
 	}
 	if u.Strategy != "" {
 		rootKf.Upstream.UpdateStrategy = u.Strategy
@@ -277,30 +290,70 @@ func (u Command) updateRootPackage(ctx context.Context, p *pkg.Pkg) error {
 	pr := printer.FromContextOrDie(ctx)
 	pr.PrintPackage(p, !(p == u.Pkg))
 
-	g := kf.Upstream.Git
-	updated := &git.RepoSpec{OrgRepo: g.Repo, Path: g.Directory, Ref: g.Ref}
-	pr.Printf("Fetching upstream from %s@%s\n", kf.Upstream.Git.Repo, kf.Upstream.Git.Ref)
-	if err := fetch.ClonerUsingGitExec(ctx, updated); err != nil {
-		return errors.E(op, p.UniquePath, err)
-	}
-	defer os.RemoveAll(updated.AbsPath())
+	var updated *git.RepoSpec
+	var updatedDigest string
+	var updatedDir string
+	var originDir string
+	switch kf.Upstream.Type {
+	case kptfilev1.GitOrigin:
+		g := kf.Upstream.Git
+		updated = &git.RepoSpec{OrgRepo: g.Repo, Path: g.Directory, Ref: g.Ref}
+		pr.Printf("Fetching upstream from %s@%s\n", kf.Upstream.Git.Repo, kf.Upstream.Git.Ref)
+		if err := fetch.ClonerUsingGitExec(ctx, updated); err != nil {
+			return errors.E(op, p.UniquePath, err)
+		}
+		defer os.RemoveAll(updated.AbsPath())
+		updatedDir = updated.AbsPath()
 
-	var origin repoClone
-	if kf.UpstreamLock != nil {
-		gLock := kf.UpstreamLock.Git
-		originRepoSpec := &git.RepoSpec{OrgRepo: gLock.Repo, Path: gLock.Directory, Ref: gLock.Commit}
-		pr.Printf("Fetching origin from %s@%s\n", kf.Upstream.Git.Repo, kf.Upstream.Git.Ref)
-		if err := fetch.ClonerUsingGitExec(ctx, originRepoSpec); err != nil {
+		var origin repoClone
+		if kf.UpstreamLock != nil {
+			gLock := kf.UpstreamLock.Git
+			originRepoSpec := &git.RepoSpec{OrgRepo: gLock.Repo, Path: gLock.Directory, Ref: gLock.Commit}
+			pr.Printf("Fetching origin from %s@%s\n", kf.Upstream.Git.Repo, kf.Upstream.Git.Ref)
+			if err := fetch.ClonerUsingGitExec(ctx, originRepoSpec); err != nil {
+				return errors.E(op, p.UniquePath, err)
+			}
+			origin = originRepoSpec
+		} else {
+			origin, err = newNilRepoClone()
+			if err != nil {
+				return errors.E(op, p.UniquePath, err)
+			}
+		}
+		defer os.RemoveAll(origin.AbsPath())
+		originDir = origin.AbsPath()
+
+	case kptfilev1.OciOrigin:
+		options := &[]crane.Option{crane.WithAuthFromKeychain(gcrane.Keychain)}
+		updatedDir, err = ioutil.TempDir("", "kpt-get-")
+		if err != nil {
+			return errors.E(op, errors.Internal, fmt.Errorf("error creating temp directory: %w", err))
+		}
+		defer os.RemoveAll(updatedDir)
+
+		if err = fetch.ClonerUsingOciPull(ctx, kf.Upstream.Oci.Image, &updatedDigest, updatedDir, options); err != nil {
 			return errors.E(op, p.UniquePath, err)
 		}
-		origin = originRepoSpec
-	} else {
-		origin, err = newNilRepoClone()
-		if err != nil {
-			return errors.E(op, p.UniquePath, err)
+
+		if kf.UpstreamLock != nil {
+			originDir, err = ioutil.TempDir("", "kpt-get-")
+			if err != nil {
+				return errors.E(op, errors.Internal, fmt.Errorf("error creating temp directory: %w", err))
+			}
+			defer os.RemoveAll(originDir)
+
+			if err = fetch.ClonerUsingOciPull(ctx, kf.UpstreamLock.Oci.Image, nil, originDir, options); err != nil {
+				return errors.E(op, p.UniquePath, err)
+			}
+		} else {
+			origin, err := newNilRepoClone()
+			if err != nil {
+				return errors.E(op, p.UniquePath, err)
+			}
+			originDir = origin.AbsPath()
+			defer os.RemoveAll(originDir)
 		}
 	}
-	defer os.RemoveAll(origin.AbsPath())
 
 	s := stack.New()
 	s.Push(".")
@@ -308,8 +361,8 @@ func (u Command) updateRootPackage(ctx context.Context, p *pkg.Pkg) error {
 	for s.Len() > 0 {
 		relPath := s.Pop()
 		localPath := filepath.Join(p.UniquePath.String(), relPath)
-		updatedPath := filepath.Join(updated.AbsPath(), relPath)
-		originPath := filepath.Join(origin.AbsPath(), relPath)
+		updatedPath := filepath.Join(updatedDir, relPath)
+		originPath := filepath.Join(originDir, relPath)
 
 		isRoot := false
 		if relPath == "." {
@@ -330,8 +383,15 @@ func (u Command) updateRootPackage(ctx context.Context, p *pkg.Pkg) error {
 		}
 	}
 
-	if err := kptfileutil.UpdateUpstreamLockFromGit(p.UniquePath.String(), updated); err != nil {
-		return errors.E(op, p.UniquePath, err)
+	switch kf.Upstream.Type {
+	case kptfilev1.GitOrigin:
+		if err := kptfileutil.UpdateUpstreamLockFromGit(p.UniquePath.String(), updated); err != nil {
+			return errors.E(op, p.UniquePath, err)
+		}
+	case kptfilev1.OciOrigin:
+		if err := kptfileutil.UpdateUpstreamLockFromOCI(p.UniquePath.String(), updatedDigest); err != nil {
+			return errors.E(op, p.UniquePath, err)
+		}
 	}
 	return nil
 }

@@ -148,7 +148,7 @@ type Git struct {
 // OCI is the user-specified locator for an image on Git.
 type Oci struct {
 	// Image is the OCI image repository for the package.
-	// e.g. 'REGION-docker.pkg.dev/PROJECT/REGISTRY/gke/hello-app:draft'
+	// e.g. 'LOCATION-docker.pkg.dev/PROJECT/REGISTRY/gke/hello-app:draft'
 	Image string `yaml:"image,omitempty"`
 }
 
@@ -188,10 +188,6 @@ type OciLock struct {
 	// Image is the OCI image repository for the package.
 	// e.g. 'gcr.io/example'
 	Image string `yaml:"image,omitempty"`
-
-	// Digest is the SHA-256 for the last update of the image.
-	// This is set by kpt for bookkeeping purposes.
-	Digest string `yaml:"commit,omitempty"`
 }
 
 // PackageInfo contains optional information about the package such as license, documentation, etc.

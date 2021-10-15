@@ -38,6 +38,7 @@ import (
 	"github.com/GoogleContainerTools/kpt/pkg/kptfile/kptfileutil"
 	"github.com/google/go-containerregistry/pkg/crane"
 	"github.com/google/go-containerregistry/pkg/gcrane"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"sigs.k8s.io/kustomize/kyaml/copyutil"
 )
@@ -301,18 +302,52 @@ func pullAndCopy(ctx context.Context, imageName string, dest string, options *[]
 	}
 	defer os.RemoveAll(dir)
 
+	var imageDigest string
+	if err := ClonerUsingOciPull(ctx, imageName, &imageDigest, dir, options); err != nil {
+		return errors.E(op, errors.OCI, types.UniquePath(dest), err)
+	}
+
+	sourcePath := dir
+	if err := pkgutil.CopyPackage(sourcePath, dest, true, pkg.All); err != nil {
+		return errors.E(op, types.UniquePath(dest), err)
+	}
+
+	if err := kptfileutil.UpdateKptfileWithoutOrigin(dest, sourcePath, false); err != nil {
+		return errors.E(op, types.UniquePath(dest), err)
+	}
+
+	if err := kptfileutil.UpdateUpstreamLockFromOCI(dest, imageDigest); err != nil {
+		return errors.E(op, errors.OCI, types.UniquePath(dest), err)
+	}
+
+	return nil
+}
+
+func ClonerUsingOciPull(ctx context.Context, imageName string, digest *string, dir string, options *[]crane.Option) error {
+	const op errors.Op = "fetch.ClonerUsingOciPull"
+
 	// Pull image from source using current auth credentials
 	image, err := crane.Pull(imageName, *options...)
 	if err != nil {
 		return fmt.Errorf("pulling %s: %v", imageName, err)
 	}
 
-	// Use image digest for
-	digest, err := image.Digest()
-	if err != nil {
-		return errors.E(op, errors.Internal, fmt.Errorf("error calculating image digest: %w", err))
+	if digest != nil {
+		// Assign digest output arg
+		hash, err := image.Digest()
+		if err != nil {
+			return errors.E(op, fmt.Errorf("error calculating image digest: %w", err))
+		}
+
+		ref, err := name.ParseReference(imageName)
+		if err != nil {
+			return err
+		}
+
+		ref = ref.Context().Digest("sha256:" + hash.Hex)
+
+		*digest = ref.Name()
 	}
-	commit := digest.Hex
 
 	// Stream image files as if single tar (merged layers)
 	ioReader := mutate.Extract(image)
@@ -357,19 +392,5 @@ func pullAndCopy(ctx context.Context, imageName string, dest string, options *[]
 
 		}
 	}
-
-	sourcePath := dir
-	if err := pkgutil.CopyPackage(sourcePath, dest, true, pkg.All); err != nil {
-		return errors.E(op, types.UniquePath(dest), err)
-	}
-
-	if err := kptfileutil.UpdateKptfileWithoutOrigin(dest, sourcePath, false); err != nil {
-		return errors.E(op, types.UniquePath(dest), err)
-	}
-
-	if err := kptfileutil.UpdateUpstreamLockFromOCI(dest, imageName, commit); err != nil {
-		return errors.E(op, errors.OCI, types.UniquePath(dest), err)
-	}
-
 	return nil
 }
