@@ -131,12 +131,14 @@ func (u Command) Run(ctx context.Context) error {
 		return errors.E(op, u.Pkg.UniquePath,
 			fmt.Errorf("package must have an upstream reference"))
 	}
-	originalRootKfRef := rootKf.Upstream.Git.Ref
+	var originalRootKfRef string
 	if u.Ref != "" {
 		if rootKf.Upstream.Git != nil {
+			originalRootKfRef = rootKf.Upstream.Git.Ref
 			rootKf.Upstream.Git.Ref = u.Ref
 		}
 		if rootKf.Upstream.Oci != nil {
+			originalRootKfRef = rootKf.Upstream.Oci.Image
 			ref, err := name.ParseReference(rootKf.Upstream.Oci.Image)
 			if err != nil {
 				return errors.E(op, u.Pkg.UniquePath, err)
@@ -214,7 +216,10 @@ func updateSubKf(subKf *kptfilev1.KptFile, ref string, strategy kptfilev1.Update
 // shouldUpdateSubPkgRef checks if subpkg ref should be updated.
 // This is true if pkg has the same upstream repo, upstream directory is within or equal to root pkg directory and original root pkg ref matches the subpkg ref.
 func shouldUpdateSubPkgRef(subKf, rootKf *kptfilev1.KptFile, originalRootKfRef string) bool {
-	return subKf.Upstream.Git.Repo == rootKf.Upstream.Git.Repo &&
+	// TODO(dejardin) support OCI as well
+	return subKf.Upstream.Git != nil &&
+		rootKf.Upstream.Git != nil &&
+		subKf.Upstream.Git.Repo == rootKf.Upstream.Git.Repo &&
 		subKf.Upstream.Git.Ref == originalRootKfRef &&
 		strings.HasPrefix(path.Clean(subKf.Upstream.Git.Directory), path.Clean(rootKf.Upstream.Git.Directory))
 }
