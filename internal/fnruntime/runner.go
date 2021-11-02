@@ -62,8 +62,9 @@ func NewContainerRunner(
 		Ctx:             ctx,
 		FnResult:        fnResult,
 	}
+	cfnr := NewContainerFnRunner(cfn)
 	fltr := &runtimeutil.FunctionFilter{
-		Run:            cfn.Run,
+		Run:            cfnr.Run,
 		FunctionConfig: config,
 	}
 	return NewFunctionRunner(ctx, fltr, pkgPath, fnResult, fnResults, true, displayResourceCount)

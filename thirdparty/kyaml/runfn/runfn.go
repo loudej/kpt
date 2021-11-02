@@ -376,8 +376,9 @@ func (r *RunFns) defaultFnFilterProvider(spec runtimeutil.FunctionSpec, fnConfig
 				AllowMount: true,
 			},
 		}
+		cfnr := fnruntime.NewContainerFnRunner(c)
 		fltr = &runtimeutil.FunctionFilter{
-			Run:            c.Run,
+			Run:            cfnr.Run,
 			FunctionConfig: fnConfig,
 			DeferFailure:   spec.DeferFailure,
 		}

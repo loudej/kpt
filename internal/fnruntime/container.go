@@ -81,6 +81,17 @@ type ContainerFn struct {
 	FnResult *fnresult.Result
 }
 
+type ContainerFnRunner interface {
+	Run(reader io.Reader, writer io.Writer) error
+}
+
+func NewContainerFnRunner(cfn *ContainerFn) ContainerFnRunner {
+	crcfn := &cloudRunContainerFn{
+		ContainerFn: cfn,
+	}
+	return crcfn
+}
+
 // Run runs the container function using docker runtime.
 // It reads the input from the given reader and writes the output
 // to the provided writer.

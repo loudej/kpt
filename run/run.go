@@ -26,6 +26,7 @@ import (
 	kptcommands "github.com/GoogleContainerTools/kpt/commands"
 	"github.com/GoogleContainerTools/kpt/internal/cmdcomplete"
 	"github.com/GoogleContainerTools/kpt/internal/docs/generated/overview"
+	"github.com/GoogleContainerTools/kpt/internal/fnruntime"
 	"github.com/GoogleContainerTools/kpt/internal/printer"
 	"github.com/GoogleContainerTools/kpt/internal/util/cmdutil"
 	"github.com/spf13/cobra"
@@ -90,6 +91,22 @@ func GetMain(ctx context.Context) *cobra.Command {
 			cmdcomplete.Complete(cmd.Parent(), false, nil).Complete("kpt")
 		},
 	})
+	// this command will be invoked by the function serving code
+	serveCmd := &cobra.Command{
+		Use:        "serve ENTRYPOINT [ARG]...",
+		Args:       cobra.MinimumNArgs(1),
+
+		Hidden:        true,
+		SilenceErrors: false,
+		SilenceUsage:  true,
+		DisableFlagParsing: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Complete exits if it is called in completion mode, otherwise it is a no-op
+			cmdcomplete.Complete(cmd.Parent(), false, nil).Complete("kpt")
+			return fnruntime.ListenAndServeFunction(args)
+		},
+	}
+	cmd.AddCommand(serveCmd)
 
 	// find the pager if one exists
 	func() {
@@ -122,10 +139,11 @@ func GetMain(ctx context.Context) *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&cmdutil.StackOnError, "stack-trace", false,
 		"Print a stack-trace on failure")
 
-	if _, err := exec.LookPath("git"); err != nil {
-		fmt.Fprintf(os.Stderr, "kpt requires that `git` is installed and on the PATH")
-		os.Exit(1)
-	}
+	// TODO(dejardin) move this into command-specific pre-run validation
+	// if _, err := exec.LookPath("git"); err != nil {
+	// 	fmt.Fprintf(os.Stderr, "kpt requires that `git` is installed and on the PATH")
+	// 	os.Exit(1)
+	// }
 
 	replace(cmd)
 
