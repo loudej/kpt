@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	goerrors "errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"net/http/httptrace"
+	"net/textproto"
 	"os"
 	"os/exec"
 	"path"
@@ -46,7 +49,10 @@ func randLetters(n int) string {
 
 
 func (c* cloudRunContainerFn) Run(reader io.Reader, writer io.Writer) error {
-	ctx := context.Background()
+	ctx := c.ContainerFn.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	project := "rickon-fishfood"
 	region := "us-central1"
@@ -196,10 +202,69 @@ func (c* cloudRunContainerFn) Run(reader io.Reader, writer io.Writer) error {
 
 	startCall := time.Now()
 
-	resp, err := http.Post(service.Status.Url, "text/vnd.yaml", reader)
+	trace := &httptrace.ClientTrace{
+		GetConn: func(hostPort string) {
+			fmt.Printf("%v: GetConn: %+v\n", time.Since(startCall), hostPort)
+		},
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			fmt.Printf("%v: GotConn: %+v\n", time.Since(startCall), connInfo)
+		},
+		PutIdleConn: func(err error) {
+			fmt.Printf("%v: PutIdleConn: %+v\n", time.Since(startCall), err)
+		},
+		GotFirstResponseByte: func() {
+			fmt.Printf("%v: GotFirstResponseByte\n", time.Since(startCall))
+		},
+		Got100Continue: func() {
+			fmt.Printf("%v: Got100Continue\n", time.Since(startCall))
+		},
+		Got1xxResponse: func(code int, header textproto.MIMEHeader) error {
+			fmt.Printf("%v: Got1xxResponse: %+v %+v\n", time.Since(startCall), code, header)
+			return nil
+		},
+		DNSStart: func(x httptrace.DNSStartInfo) {
+			fmt.Printf("%v: DNSStart: %+v\n", time.Since(startCall), x)
+		},
+		DNSDone: func(x httptrace.DNSDoneInfo) {
+			fmt.Printf("%v: DNSDone: %+v\n", time.Since(startCall), x)
+		},
+		ConnectStart: func(network string, addr string) {
+			fmt.Printf("%v: ConnectStart: %+v %+v\n", time.Since(startCall), network, addr)
+		},
+		ConnectDone: func(network string, addr string, err error) {
+			fmt.Printf("%v: ConnectDone: %+v %+v %+v\n", time.Since(startCall), network, addr, err)
+		},
+		TLSHandshakeStart: func() {
+			fmt.Printf("%v: TLSHandshakeStart\n", time.Since(startCall))
+		},
+		TLSHandshakeDone: func(x tls.ConnectionState, err error) {
+			fmt.Printf("%v: TLSHandshakeDone: %+v %+v\n", time.Since(startCall), x, err)
+		},
+		WroteHeaderField: func(key string, value []string) {
+			fmt.Printf("%v: WroteHeaderField: %+v %+v\n", time.Since(startCall), key, value)
+		},
+		WroteHeaders: func() {
+			fmt.Printf("%v: WroteHeaders\n", time.Since(startCall))
+		},
+		Wait100Continue: func() {
+			fmt.Printf("%v: Wait100Continue", time.Since(startCall))
+		},
+		WroteRequest: func(x httptrace.WroteRequestInfo) {
+			fmt.Printf("%v: WroteRequest: %+v\n", time.Since(startCall), x)
+		},
+	}
+
+	req, err := http.NewRequest("POST", service.Status.Url, reader)
 	if err != nil {
 		return fmt.Errorf("sending request %s: %w", service.Status.Url, err)
 	}
+	resp, err := http.DefaultTransport.RoundTrip(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	if err != nil {
+		return fmt.Errorf("sending request %s: %w", service.Status.Url, err)
+	}
+
+
+	// resp, err := http.Post(service.Status.Url, "text/vnd.yaml", reader)
 
 	// TODO(dejardin) error for non-200
 	
