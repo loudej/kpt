@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GoogleContainerTools/kpt/pkg/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -280,7 +281,7 @@ func InstallResourceGroupCRD(factory cmdutil.Factory) error {
 		for _, t := range tasks {
 			taskQueue <- t
 		}
-		statusPoller, err := polling.NewStatusPollerFromFactory(factory, []engine.StatusReader{})
+		statusPoller, err := status.NewStatusPoller(factory)
 		if err != nil {
 			handleError(eventChannel, err)
 			return
